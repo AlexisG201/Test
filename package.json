@@ -1,0 +1,8 @@
+{
+  "name": "ema-indonesia-2013",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Buildless Indonesia 2013 teaching simulation for GitHub Pages",
+  "scripts": {"test": "node --test tests/model.test.cjs"},
+  "engines": {"node": ">=18"}
+}
