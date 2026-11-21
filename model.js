@@ -1,31 +1,44 @@
-(function(root){
+(function (root) {
   'use strict';
-  const VERSION='IDN-SYNTH-2.0';
-  const DEFAULTS=Object.freeze({tax:50,subsidy:25,aid:60,borrow:400});
-  // Synthetic teaching constants (all invented; see the assumptions panel).
-  const BORROW_CEILING=400;          // fiscal-rule ceiling: 2% of a synthetic GDP of Rp20,000T
-  const HOUSEHOLDS=70e6;             // synthetic number of households
-  const RECIPIENTS=20e6;             // households receiving assistance
-  const FIRMS=5e6;                   // synthetic number of firms
-  const HOUSEHOLD_TAX_SHARE=0.6;     // share of extra tax that falls on households (rest on firms)
-  const bounds={tax:[0,200,10],subsidy:[0,80,5],aid:[0,240,10],borrow:[0,BORROW_CEILING,10]};
-  function normalize(values){const result={};for(const key of Object.keys(bounds)){const [min,max,step]=bounds[key];const value=Number(values&&values[key]);result[key]=Number.isFinite(value)?Math.round(Math.min(max,Math.max(min,value))/step)*step:DEFAULTS[key];}return result;}
-  function calculate(input){
-    const p=normalize(input);
-    const savings=400*p.subsidy/100;
-    const revenue=2500+p.tax;
-    const spending=3000-savings+p.aid;
-    const deficit=spending-revenue;
-    const price=.4*p.subsidy;
-    const familyTax=p.tax*1e12*HOUSEHOLD_TAX_SHARE/HOUSEHOLDS/12;
-    const firmTax=p.tax*1e12*(1-HOUSEHOLD_TAX_SHARE)/FIRMS/12;
-    const familyFuel=400000*price/100;
-    const transfer=p.aid*1e12/RECIPIENTS/12;
-    const familyChange=transfer-familyFuel-familyTax;
-    const excludedChange=-familyFuel-familyTax;
-    const firmChange=-10000000*price/100-firmTax;
-    return {savings,revenue,spending,deficit,financingBalance:p.borrow-deficit,price,interest:p.borrow*.07,transfer,familyTax,firmTax,familyChange,excludedChange,firmChange,familyRemaining:600000+familyChange,excludedRemaining:600000+excludedChange,firmProfit:15000000+firmChange};
+  const limits = { petrol:[4500,7500], diesel:[4500,6500], tax:[0,60], assistance:[0,40], borrowing:[0,300] };
+  function number(value, name, min=0, max=Infinity) {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) throw new Error('Invalid '+name);
+    return value;
   }
-  const api={VERSION,DEFAULTS,BORROW_CEILING,HOUSEHOLDS,RECIPIENTS,FIRMS,HOUSEHOLD_TAX_SHARE,normalize,calculate};
-  if(typeof module==='object'&&module.exports)module.exports=api;else root.PolicyModel=api;
-})(typeof globalThis!=='undefined'?globalThis:this);
+  function calculate(policy, config, stress=false, assumptions=config.assumptions) {
+    for (const [key, range] of Object.entries(limits)) number(policy[key], key, ...range);
+    const a=assumptions, b=config.baseline;
+    number(a.petrolBillionLitres,'petrol volume',0,50);number(a.dieselBillionLitres,'diesel volume',0,50);
+    number(a.petrolWeight,'weight',0,1);number(a.inflationCoefficient,'inflation coefficient',0,20);
+    number(a.businessFuelShare,'business share',0,1);number(a.householdMonthlySpending,'spending',1,100000000);
+    number(a.transferHouseholdsMillion,'households',0.1,100);number(a.transferLossPercent,'transfer loss',0,100);
+    number(a.stressSubsidyIncrement,'stress increment',0,100);
+    const petrolRise=(policy.petrol-b.petrol)/b.petrol, dieselRise=(policy.diesel-b.diesel)/b.diesel;
+    const fuelIndex=a.petrolWeight*petrolRise+(1-a.petrolWeight)*dieselRise;
+    const stressCost=stress?a.stressSubsidyIncrement:0;
+    const grossSavings=(policy.petrol-b.petrol)*a.petrolBillionLitres/1000+(policy.diesel-b.diesel)*a.dieselBillionLitres/1000;
+    const savings=Math.min(b.fuelSubsidy+stressCost,grossSavings);
+    const revenue=b.revenue+policy.tax;
+    const expenditure=b.expenditureReported+b.reconciliation+stressCost-savings+policy.assistance;
+    const deficit=expenditure-revenue, financingNeed=Math.max(0,deficit);
+    const financingGap=financingNeed-policy.borrowing;
+    const inflationIncrement=a.inflationCoefficient*fuelIndex;
+    const transferPerHousehold=policy.assistance*1e6/a.transferHouseholdsMillion*(1-a.transferLossPercent/100);
+    const householdExtraCost=a.householdMonthlySpending*4*inflationIncrement/100;
+    return { revenue, expenditure, deficit, deficitPercent:deficit/b.gdpProxy*100,
+      financingNeed, financingGap, fuelSubsidy:b.fuelSubsidy+stressCost-savings,
+      savings, stressCost, petrolRise:petrolRise*100, dieselRise:dieselRise*100,
+      inflation:b.inflation+inflationIncrement, inflationIncrement,
+      businessCostPercent:a.businessFuelShare*fuelIndex*100,
+      transferPerHousehold, householdExtraCost, householdNet:transferPerHousehold-householdExtraCost };
+  }
+  function defaultPolicy(config){return {petrol:4500,diesel:4500,tax:0,assistance:0,borrowing:config.baseline.deficitReported};}
+  function roleFor(memberIndex, round){return ['Government','Businesses','Communities'][(memberIndex+round-1)%3];}
+  function csv(rows, columns){
+    const quote=v=>{let s=v==null?'':typeof v==='object'?JSON.stringify(v):String(v);if(typeof v==='string'&&/^[\s]*[=+\-@]/.test(s))s="'"+s;return '"'+s.replaceAll('"','""')+'"';};
+    return '\uFEFF'+[columns.map(quote).join(','),...rows.map(row=>columns.map(c=>quote(row[c])).join(','))].join('\r\n');
+  }
+  const api={calculate,defaultPolicy,roleFor,csv,limits};
+  root.EMA_MODEL=api;
+  if(typeof module!=='undefined')module.exports=api;
+})(globalThis);
